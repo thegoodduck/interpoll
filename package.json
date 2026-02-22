@@ -39,7 +39,7 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
-    "@capacitor/cli": "^5.6.0",
+    "@capacitor/cli": "^8.1.0",
     "@types/node": "^20.10.0",
     "@vitejs/plugin-vue": "^5.0.0",
     "autoprefixer": "^10.4.16",
