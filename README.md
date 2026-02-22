@@ -10,3 +10,5 @@ We provide websocket and GunDB server at https://interpoll.onrender.com and http
 Spec is located at spec.md
 
 Prod client with configuration to default backend and basically main instance is at https://endless.sbs
+
+I have provided Gun and WSS based on specs i did. This is vibe coded and should be cleaned up before being used for anything imported. Hand coded version is for prod and is withheld due to security concerns.

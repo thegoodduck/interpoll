@@ -59,7 +59,15 @@ export const usePollStore = defineStore('poll', () => {
       (updatedPoll) => {
         pollsMap.value.set(updatedPoll.id, updatedPoll);
         if (currentPoll.value?.id === updatedPoll.id) {
-          currentPoll.value = updatedPoll;
+          // Only replace if data actually changed — avoids reactive
+          // re-renders (and ion-radio-group selection resets) caused by
+          // GunDB live-sync firing repeatedly with identical data.
+          const cur = currentPoll.value;
+          const optionsChanged = JSON.stringify(cur.options) !== JSON.stringify(updatedPoll.options);
+          const votesChanged = cur.totalVotes !== updatedPoll.totalVotes;
+          if (optionsChanged || votesChanged) {
+            currentPoll.value = updatedPoll;
+          }
         }
       },
     );

@@ -17,7 +17,7 @@
       </div>
 
       <!-- Error State -->
-      <div v-else-if="!pollStore.currentPoll" class="flex flex-col items-center justify-center py-12">
+      <div v-else-if="!localPoll" class="flex flex-col items-center justify-center py-12">
         <ion-icon :icon="alertCircle" size="large" color="danger"></ion-icon>
         <p class="mt-4 text-gray-600">Poll not found</p>
         <ion-button class="mt-4" @click="router.push('/home')">
@@ -26,8 +26,8 @@
       </div>
 
       <!-- Vote Form -->
-      <div v-else-if="pollStore.currentPoll">
-        <div v-if="pollStore.currentPoll.isPrivate" class="mb-4 space-y-2">
+      <div v-else-if="localPoll">
+        <div v-if="localPoll.isPrivate" class="mb-4 space-y-2">
           <ion-item>
             <ion-label position="stacked">Invite Code</ion-label>
             <ion-input
@@ -38,9 +38,9 @@
         </div>
 
         <VoteForm
-          :poll="pollStore.currentPoll"
+          :poll="localPoll"
           :invite-code="inviteCode"
-          :requires-invite-code="pollStore.currentPoll.isPrivate"
+          :requires-invite-code="localPoll.isPrivate"
           @vote-submitted="handleVoteSubmitted"
         />
       </div>
@@ -77,12 +77,19 @@ const pollStore = usePollStore();
 const chainStore = useChainStore();
 const isLoading = ref(true);
 const inviteCode = ref<string>('');
+const localPoll = ref<any>(null);
 
 onMounted(async () => {
   try {
     await chainStore.initialize();
     const pollId = route.params.pollId as string;
     await pollStore.selectPoll(pollId);
+
+    // Snapshot the poll into a local ref so GunDB live-sync updates
+    // don't cause VoteForm to re-render and reset the selection.
+    if (pollStore.currentPoll) {
+      localPoll.value = { ...pollStore.currentPoll };
+    }
 
     const initialCode = route.query.code as string | undefined;
     if (initialCode) {

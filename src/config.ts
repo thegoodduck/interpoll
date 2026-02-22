@@ -29,9 +29,9 @@ function loadOverrides(): RelayOverrides {
 
 // Defaults always point to Render URLs
 const defaults = {
-  websocket: 'wss://interpoll.onrender.com',
-  gun: 'https://interpoll2.onrender.com/gun',
-  api: 'https://interpoll.onrender.com',
+  websocket: 'ws://localhost:8080',
+  gun: 'http://localhost:8765/gun',
+  api: 'http://localhost:8080',
 };
 
 let overrides = loadOverrides();

@@ -1,0 +1,12 @@
+{
+  "name": "interpoll-community-relay",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Community WebSocket relay server for InterPoll",
+  "scripts": {
+    "start": "node community-relay-server.js"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  }
+}

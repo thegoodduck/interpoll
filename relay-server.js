@@ -11,6 +11,52 @@ import crypto from 'crypto';
 import { URL } from 'url';
 
 const PORT = 8080;
+
+// ─── Rate limiting ──────────────────────────────────────────────────────────
+// Simple sliding-window counters keyed by IP address.
+
+const rateLimitState = {
+  http: new Map(),   // ip -> { count, resetAt }
+  ws: new Map(),     // ip -> { count, resetAt }
+  wsMsg: new Map(),  // peerId -> { count, resetAt }
+};
+
+const RATE_LIMITS = {
+  httpWindow: 60_000,       // 1 minute
+  httpMax: 60,              // 60 HTTP requests per minute per IP
+  wsConnWindow: 60_000,     // 1 minute
+  wsConnMax: 10,            // 10 new WS connections per minute per IP
+  wsMsgWindow: 10_000,      // 10 seconds
+  wsMsgMax: 100,            // 100 messages per 10s per connection
+};
+
+function checkRateLimit(store, key, windowMs, max) {
+  const now = Date.now();
+  let entry = store.get(key);
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 0, resetAt: now + windowMs };
+    store.set(key, entry);
+  }
+  entry.count++;
+  return entry.count <= max;
+}
+
+function getClientIp(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+    || req.socket.remoteAddress
+    || 'unknown';
+}
+
+// Purge stale entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const store of Object.values(rateLimitState)) {
+    for (const [key, entry] of store) {
+      if (now > entry.resetAt) store.delete(key);
+    }
+  }
+}, 300_000);
+
 const server = http.createServer();
 const wss = new WebSocketServer({ server });
 
@@ -189,6 +235,14 @@ server.on('request', (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  // Rate limit HTTP requests
+  const clientIp = getClientIp(req);
+  if (!checkRateLimit(rateLimitState.http, clientIp, RATE_LIMITS.httpWindow, RATE_LIMITS.httpMax)) {
+    res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '60' });
+    res.end(JSON.stringify({ error: 'Too many requests' }));
     return;
   }
 
@@ -499,10 +553,29 @@ server.on('request', (req, res) => {
 
 wss.on('connection', (ws, req) => {
   let peerId = null;
-  
+
+  // Rate limit WebSocket connections per IP
+  const clientIp = getClientIp(req);
+  if (!checkRateLimit(rateLimitState.ws, clientIp, RATE_LIMITS.wsConnWindow, RATE_LIMITS.wsConnMax)) {
+    ws.close(1008, 'Too many connections');
+    return;
+  }
+
+  // Per-connection message rate limit key (use socket address until peerId is set)
+  const msgKey = `${clientIp}:${Date.now()}`;
+
   console.log('🔌 New connection from', req.socket.remoteAddress);
 
   ws.on('message', (message) => {
+    // Rate limit messages per connection
+    const limitKey = peerId || msgKey;
+    if (!checkRateLimit(rateLimitState.wsMsg, limitKey, RATE_LIMITS.wsMsgWindow, RATE_LIMITS.wsMsgMax)) {
+      if (ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Rate limited — slow down' }));
+      }
+      return;
+    }
+
     try {
       const data = JSON.parse(message.toString());
       
@@ -583,7 +656,8 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => {
     if (peerId) {
       clients.delete(peerId);
-      
+      rateLimitState.wsMsg.delete(peerId);
+
       // Remove from all rooms
       rooms.forEach((peers, roomId) => {
         peers.delete(peerId);

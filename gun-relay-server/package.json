@@ -1,0 +1,14 @@
+{
+  "name": "interpoll-gun-relay",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Community GunDB relay server for InterPoll",
+  "scripts": {
+    "start": "node gun-relay.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "gun": "^0.2020.1241"
+  }
+}

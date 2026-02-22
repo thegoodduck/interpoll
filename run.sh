@@ -16,7 +16,7 @@ tmux send-keys -t "$SESSION:services.0" "npm run dev" C-m
 
 # Split right → Pane 2
 tmux split-window -h -t "$SESSION:services"
-tmux send-keys -t "$SESSION:services.1" "node relay-server.js" C-m
+tmux send-keys -t "$SESSION:services.1" "cd community-relay-server && node community-relay-server.js" C-m
 
 # Split right again → Pane 3
 tmux split-window -h -t "$SESSION:services"
