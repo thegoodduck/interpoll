@@ -36,6 +36,7 @@ export default defineConfig({
       transformMixedEsModules: true
     },
     rollupOptions: {
+      external: ['nsfwjs'],
       onwarn(warning, warn) {
         if (warning.code === 'SOURCEMAP_ERROR') return;
         warn(warning);

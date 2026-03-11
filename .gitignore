@@ -12,6 +12,18 @@ dist
 dist-ssr
 *.local
 
+# Environment & secrets
+.env
+.env.*
+
+# Runtime data
+storage.txt
+message-cache.json
+community-relay-server/message-cache.json
+peer-data/
+gun-relay-server/gun-data/
+gun-relay-server/radata/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -22,7 +34,3 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-gun-relay-server/radata
-gun-relay-server/radata/!
-gun-relay-server/radata/%1C
-gun-relay-server/radata/!

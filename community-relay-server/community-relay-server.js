@@ -79,6 +79,13 @@ const voteRegistry = new Set();
 // Append-only receipt log (spec section 8.2)
 const RECEIPT_LOG_FILE = path.join(__dirname, 'storage.txt');
 
+// ─── Search index (spec section 18) ─────────────────────────────────────────
+// In-memory full-text index for community edition.
+// Production uses a dedicated search backend.
+
+const searchIndex = [];   // { type, id, data, indexedAt }
+const MAX_INDEX_SIZE = 10000;
+
 // ─── Message cache (spec section 4.6) ───────────────────────────────────────
 
 const MESSAGE_CACHE_FILE = path.join(__dirname, 'message-cache.json');
@@ -233,6 +240,68 @@ server.on('request', (req, res) => {
     return;
   }
 
+  // ── POST /auth/logout — no-op for community server (no sessions) ──
+
+  if (req.method === 'POST' && url.pathname === '/auth/logout') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // ── POST /api/index (spec section 18.1) — index content for search ──
+
+  if (req.method === 'POST' && url.pathname === '/api/index') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk.toString(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body || '{}');
+        if (data.type && data.id && data.data) {
+          searchIndex.push({
+            type: data.type,
+            id: data.id,
+            data: data.data,
+            indexedAt: Date.now(),
+          });
+          while (searchIndex.length > MAX_INDEX_SIZE) searchIndex.shift();
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false }));
+      }
+    });
+    return;
+  }
+
+  // ── GET /api/search (spec section 18.2) — full-text search ──
+
+  if (req.method === 'GET' && url.pathname === '/api/search') {
+    const query = (url.searchParams.get('q') || '').toLowerCase();
+    const typeFilter = url.searchParams.get('type');
+    const communityFilter = url.searchParams.get('community');
+    const limit = Math.min(parseInt(url.searchParams.get('limit') || '20', 10), 100);
+    const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+
+    let results = searchIndex;
+    if (typeFilter) results = results.filter((r) => r.type === typeFilter);
+    if (communityFilter) results = results.filter((r) => r.data?.communityId === communityFilter);
+    if (query) {
+      results = results.filter((r) => {
+        const text = JSON.stringify(r.data).toLowerCase();
+        return text.includes(query);
+      });
+    }
+
+    const total = results.length;
+    results = results.slice(offset, offset + limit);
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ results, total }));
+    return;
+  }
+
   // ── GET /health — server health check ──
 
   if (req.method === 'GET' && url.pathname === '/health') {
@@ -348,12 +417,27 @@ wss.on('connection', (ws, req) => {
           break;
         }
 
-        // ── Unwrapped P2P message types (spec section 4.4) ──
+        // ── Unwrapped P2P message types (spec sections 4.4, 13–15) ──
         case 'new-poll':
         case 'new-block':
         case 'new-event':
         case 'request-sync':
         case 'sync-response':
+        case 'chat-start':
+        case 'chat-message':
+        case 'chat-typing':
+        case 'chat-read':
+        case 'chat-delivered':
+        case 'chat-read-receipt':
+        case 'chatroom-message':
+        case 'rtc-offer':
+        case 'rtc-answer':
+        case 'rtc-ice':
+        case 'snapshot-offer':
+        case 'snapshot-accept':
+        case 'snapshot-chunk':
+        case 'snapshot-complete':
+        case 'snapshot-cancel':
           console.log(`Broadcasting ${data.type} from ${peerId}`);
           broadcastToOthers(peerId, data);
           cacheMessage(data);

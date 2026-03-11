@@ -1,7 +1,8 @@
 {
   "name": "interpoll",
-  "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Decentralised polling and community platform with local blockchain audit, end-to-end encryption, and peer-to-peer sync.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -19,7 +19,6 @@ import fs from 'fs';
 import path from 'path';
 import http from 'http';
 import { fileURLToPath } from 'url';
-console.log('WSS Initialized, this is @thegoodduck and @theendless11, built with love ❤️');
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);

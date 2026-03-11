@@ -1,12 +1,12 @@
 # InterPoll Protocol Specification
 
 > **Protocol codename:** **TurkeyLuck**  
-> **Version:** 1.0  
-> **Date:** 2026-02-21  
+> **Version:** 2.0  
+> **Date:** 2026-03-11  
 > **Authors:** @thegoodduck & @theendless11
 
-> **Note** This spec describes the GunDB data schema and WebSocket relay protocol used by InterPoll, so that anyone can build a compatible client or server. **Sorry for not publishing prod backend, we are afraid of hackers :-(**
-Hope you appreciate it, took a little while to write this(i am @thegoodduck for the record) this is my first time writing specs i read bunch of manuals and other specs before hand. ChatGPT cleaned up so all the nice linkbacks and all that stuff is it, i wrote it in plaintext it converted it to MD.
+> This specification describes the full data schema, relay protocol, cryptography, and API surface used by InterPoll. It is published so that anyone can build a compatible client or server. The production backend uses a hardened implementation; community edition releases may lag behind, but this spec is always current.
+
 ---
 
 ## Table of Contents
@@ -21,6 +21,15 @@ Hope you appreciate it, took a little while to write this(i am @thegoodduck for 
 8. [HTTP API Endpoints](#8-http-api-endpoints)
 9. [Server Discovery & Mesh](#9-server-discovery--mesh)
 10. [Reference: Default Endpoints](#10-reference-default-endpoints)
+11. [End-to-End Encryption](#11-end-to-end-encryption)
+12. [Private & Encrypted Communities](#12-private--encrypted-communities)
+13. [Chat & Messaging](#13-chat--messaging)
+14. [WebRTC Peer Connections](#14-webrtc-peer-connections)
+15. [Snapshot Sync](#15-snapshot-sync)
+16. [Data Versioning](#16-data-versioning)
+17. [User Identity & Pseudonyms](#17-user-identity--pseudonyms)
+18. [Search & Indexing API](#18-search--indexing-api)
+19. [Content Moderation](#19-content-moderation)
 
 ---
 
@@ -802,19 +811,21 @@ Empty strings fall back to built-in defaults.
 
 **Gun Relay Server:**
 ```bash
-npm install express gun cors
+cd gun-relay-server
+npm install
 node gun-relay.js
 # Listens on port 8765 by default (set PORT env var to override)
 ```
 
 **WebSocket Relay Server:**
 ```bash
-npm install ws
-node relay-server.js
-# Listens on port 8080 by default
+cd community-relay-server
+npm install
+node community-relay-server.js
+# Listens on port 8080 by default (set PORT env var to override)
 ```
 
-Both servers are stateless enough to run anywhere. The Gun relay persists data to disk via `radisk`. The WS relay caches messages in `message-cache.json` and vote-authorization state in memory (lost on restart).
+Both servers are stateless enough to run anywhere. The Gun relay persists data to disk via `radisk` and exposes a REST query API. The WS relay caches messages in `message-cache.json` and vote-authorisation state in memory (lost on restart).
 
 ---
 
@@ -854,3 +865,443 @@ Same-origin tab sync uses `BroadcastChannel('interpoll-sync')`. Message format i
 | `sync-response` | P2P | **Yes** | Chain sync payload |
 | `peer-addresses` | P2P | No | Relay address sharing |
 | `server-list` | P2P | No | Known server gossip |
+| `chat-start` | P2P | No | Initiate chat session |
+| `chat-message` | P2P | No | Encrypted chat message |
+| `chat-typing` | P2P | No | Typing indicator |
+| `chat-read` | P2P | No | Read receipt |
+| `chat-delivered` | P2P | No | Delivery confirmation |
+| `chat-read-receipt` | P2P | No | Read acknowledgment |
+| `chatroom-message` | P2P | No | Group chat room message |
+| `rtc-offer` | P2P | No | WebRTC SDP offer |
+| `rtc-answer` | P2P | No | WebRTC SDP answer |
+| `rtc-ice` | P2P | No | WebRTC ICE candidate |
+| `snapshot-offer` | P2P | No | Bulk state transfer offer |
+| `snapshot-accept` | P2P | No | Accept snapshot transfer |
+| `snapshot-chunk` | P2P | No | Snapshot data chunk |
+| `snapshot-complete` | P2P | No | Snapshot transfer complete |
+| `snapshot-cancel` | P2P | No | Cancel snapshot transfer |
+
+---
+
+## 11. End-to-End Encryption
+
+InterPoll supports optional end-to-end encryption for communities, chat rooms, and direct messages using AES-256-GCM via the Web Crypto API.
+
+### 11.1 Encryption Scheme
+
+| Parameter | Value |
+|-----------|-------|
+| Algorithm | AES-256-GCM |
+| Key derivation | PBKDF2 (SHA-256, 100 000 iterations) |
+| IV | 12 bytes, randomly generated per encryption |
+| Salt | 16 bytes, randomly generated per key derivation |
+
+### 11.2 Encrypted Blob Format
+
+All encrypted data is stored as an `EncryptedBlob`:
+
+```typescript
+interface EncryptedBlob {
+  ciphertext: string;   // Base64-encoded ciphertext
+  iv: string;           // Base64-encoded 12-byte IV
+  salt: string;         // Base64-encoded 16-byte salt
+  version: number;      // Schema version (currently 1)
+}
+```
+
+### 11.3 Server-Wide Encryption
+
+A server operator can enable encryption for all content via the client's encryption config:
+
+```typescript
+interface EncryptionConfig {
+  encryptAll: boolean;          // Encrypt all content by default
+  serverPassword: string;       // Password for AES key derivation
+  requireInviteToJoin: boolean; // Require invite link to access
+}
+```
+
+Stored in `localStorage` under key `interpoll_encryption_config`.
+
+### 11.4 Key Storage
+
+Encryption keys are stored in IndexedDB:
+
+```typescript
+interface StoredEncryptionKey {
+  id: string;          // Key identifier (e.g., community ID)
+  key: CryptoKey;      // Web Crypto API key object
+  salt: Uint8Array;    // Salt used for derivation
+  createdAt: number;   // Timestamp
+}
+```
+
+---
+
+## 12. Private & Encrypted Communities
+
+### 12.1 Community Privacy Levels
+
+| Level | Description |
+|-------|-------------|
+| **Public** | Open to everyone, no encryption |
+| **Password-protected** | Requires a password to join; all content encrypted with derived key |
+| **Invite-only** | Requires an invite link containing the encryption key |
+
+### 12.2 Encrypted Community Data
+
+When a community is encrypted, the following fields are stored as `EncryptedBlob`:
+
+- Community `description`
+- Post `title`, `content`
+- Comment `content`
+- Poll `question`, `description`
+
+The `name` and `displayName` fields remain in plaintext for discoverability.
+
+### 12.3 Invite Links
+
+Invite links encode the community ID and encryption password as a URL fragment:
+
+```
+https://<host>/join/<communityId>#<base64-encoded-password>
+```
+
+The fragment (after `#`) is never sent to the server — it stays client-side.
+
+---
+
+## 13. Chat & Messaging
+
+### 13.1 Direct Messages
+
+Direct messages are end-to-end encrypted using RSA-OAEP key exchange. Each peer generates an RSA key pair on first use and shares the public key during the `chat-start` handshake.
+
+#### Message Types
+
+**`chat-start`** — Initiate a chat session:
+```json
+{ "type": "chat-start", "data": { "recipientId": "<peerId>" } }
+```
+
+**`chat-message`** — Send an encrypted message:
+```json
+{
+  "type": "chat-message",
+  "data": {
+    "recipientId": "<peerId>",
+    "encryptedForRecipient": "<base64-ciphertext>",
+    "messageId": "<uuid>",
+    "timestamp": 1708500000000
+  }
+}
+```
+
+**`chat-typing`** — Typing indicator:
+```json
+{ "type": "chat-typing", "data": { "recipientId": "<peerId>", "isTyping": true } }
+```
+
+**`chat-read`** — Mark messages as read:
+```json
+{ "type": "chat-read", "data": { "recipientId": "<peerId>" } }
+```
+
+### 13.2 Group Chat Rooms
+
+Group chat rooms use AES-256-GCM with a shared room key. Room messages are broadcast via the relay:
+
+**`chatroom-message`** — Group chat message:
+```json
+{
+  "type": "chatroom-message",
+  "data": {
+    "roomId": "<roomId>",
+    "data": { /* encrypted message payload */ }
+  }
+}
+```
+
+---
+
+## 14. WebRTC Peer Connections
+
+After peers discover each other via the WebSocket relay, they can establish direct WebRTC data channels to bypass the relay for lower latency.
+
+### 14.1 Signalling Messages
+
+All signalling goes through the WebSocket relay as broadcast messages.
+
+**`rtc-offer`** — SDP offer:
+```json
+{
+  "type": "rtc-offer",
+  "data": {
+    "peerId": "<sender>",
+    "targetPeerId": "<recipient>",
+    "sdp": "<SDP offer string>"
+  }
+}
+```
+
+**`rtc-answer`** — SDP answer:
+```json
+{
+  "type": "rtc-answer",
+  "data": {
+    "peerId": "<sender>",
+    "targetPeerId": "<recipient>",
+    "sdp": "<SDP answer string>"
+  }
+}
+```
+
+**`rtc-ice`** — ICE candidate:
+```json
+{
+  "type": "rtc-ice",
+  "data": {
+    "peerId": "<sender>",
+    "targetPeerId": "<recipient>",
+    "candidate": { /* RTCIceCandidate */ }
+  }
+}
+```
+
+### 14.2 Data Channel
+
+Once the WebRTC connection is established, peers use a data channel named `interpoll` for direct message exchange. The message format is identical to WebSocket application-level messages (§4.4).
+
+---
+
+## 15. Snapshot Sync
+
+Snapshot sync provides bulk state transfer for peers that are too far behind for incremental sync.
+
+### 15.1 Protocol Flow
+
+```
+Peer A                              Peer B
+  │                                    │
+  │── snapshot-offer ─────────────────►│  (size, hash, metadata)
+  │◄── snapshot-accept ────────────────│
+  │── snapshot-chunk (1/N) ───────────►│
+  │── snapshot-chunk (2/N) ───────────►│
+  │── ...                             │
+  │── snapshot-complete ──────────────►│  (final hash)
+  │                                    │
+```
+
+### 15.2 Message Types
+
+**`snapshot-offer`:**
+```json
+{
+  "type": "snapshot-offer",
+  "data": {
+    "peerId": "<sender>",
+    "size": 524288,
+    "hash": "<sha256-hex>",
+    "meta": {
+      "postCount": 42,
+      "communityCount": 5,
+      "blockHeight": 128
+    }
+  }
+}
+```
+
+**`snapshot-accept`:**
+```json
+{ "type": "snapshot-accept", "data": { "targetPeerId": "<offerer>", "peerId": "<acceptor>" } }
+```
+
+**`snapshot-chunk`:**
+```json
+{
+  "type": "snapshot-chunk",
+  "data": {
+    "chunk": "<base64-data>",
+    "chunkIndex": 0,
+    "totalChunks": 10,
+    "hash": "<chunk-sha256>"
+  }
+}
+```
+
+**`snapshot-cancel`:**
+```json
+{ "type": "snapshot-cancel", "data": { "targetPeerId": "<peerId>", "reason": "timeout" } }
+```
+
+---
+
+## 16. Data Versioning
+
+GunDB data is namespaced to allow schema migrations without breaking existing data.
+
+### 16.1 Namespace Format
+
+All GunDB paths are prefixed with a version string:
+
+| Version | Prefix | Status |
+|---------|--------|--------|
+| v1 | _(none)_ | Legacy, still readable |
+| v2 | `v2/` | Current default |
+
+Example: `gun.get('v2/communities').get('<communityId>')`
+
+### 16.2 Version Probing
+
+Clients probe the GunDB relay to discover which data versions contain data. The active version is stored in `localStorage` under key `interpoll_data_version`.
+
+### 16.3 Multi-Version Reads
+
+Clients can optionally read from multiple data versions simultaneously (e.g., to surface v1 legacy content alongside v2 data).
+
+---
+
+## 17. User Identity & Pseudonyms
+
+### 17.1 Device Identity
+
+Each device generates a persistent anonymous identity:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `deviceId` | `string` | SHA-256 fingerprint of browser/device properties |
+| `userId` | `string` | Format: `anon_<timestampMs>`, generated on first visit |
+
+Stored in `localStorage` under key `interpoll_user_id`.
+
+### 17.2 Deterministic Pseudonyms
+
+To provide consistent but anonymous display names, a deterministic pseudonym is generated for each `(userId, contextId)` pair using FNV-1a hashing:
+
+```
+pseudonym = "<adjective>-<color>-<animal>"
+```
+
+Example: `"bright-amber-sparrow"`
+
+The same user gets the same pseudonym within a given context (post, community) but a different one in other contexts.
+
+### 17.3 User Profiles
+
+User profiles are stored in GunDB:
+
+**Path:** `gun.get('v2/users').get('<userId>')`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `displayName` | `string` | User-chosen display name |
+| `bio` | `string` | Profile bio |
+| `karma` | `number` | Accumulated score |
+| `joinedAt` | `number` | Unix timestamp (ms) |
+
+---
+
+## 18. Search & Indexing API
+
+### 18.1 `POST /api/index`
+
+Submit content for server-side indexing.
+
+**Request:**
+```json
+{
+  "type": "post",
+  "id": "post-xxx",
+  "data": {
+    "title": "Hello World",
+    "content": "Post body text",
+    "communityId": "c-general",
+    "authorId": "anon_123",
+    "createdAt": 1708500000000
+  }
+}
+```
+
+**Response:**
+```json
+{ "ok": true }
+```
+
+### 18.2 `GET /api/search`
+
+Full-text search across indexed content.
+
+**Query parameters:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `q` | `string` | Search query (required) |
+| `type` | `string` | Filter by content type: `post`, `poll` |
+| `community` | `string` | Filter by community ID |
+| `limit` | `number` | Max results (default: 20) |
+| `offset` | `number` | Pagination offset |
+
+**Response:**
+```json
+{
+  "results": [
+    { "type": "post", "id": "post-xxx", "data": { ... }, "score": 0.95 }
+  ],
+  "total": 42
+}
+```
+
+### 18.3 `GET /db/search`
+
+Query the GunDB relay's radisk storage directly via REST.
+
+**Query parameters:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `prefix` | `string` | GunDB path prefix (e.g., `v2/communities`) |
+| `limit` | `number` | Max results |
+
+**Response:**
+```json
+{
+  "results": [
+    { "soul": "v2/communities/c-general", "data": { ... } }
+  ]
+}
+```
+
+### 18.4 `GET /db/soul`
+
+Fetch a specific GunDB record by its soul (path).
+
+**Query parameters:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `soul` | `string` | Full GunDB soul path |
+
+**Response:**
+```json
+{ "soul": "v2/communities/c-general", "data": { ... } }
+```
+
+---
+
+## 19. Content Moderation
+
+### 19.1 Client-Side NSFW Detection
+
+The client performs optional client-side NSFW content detection on uploaded images before submission. Flagged content is tagged but not blocked — moderation policy is left to community operators.
+
+### 19.2 Moderation Actions
+
+Community creators can perform moderation actions stored in GunDB:
+
+| Action | Description |
+|--------|-------------|
+| Pin post | Pin a post to the top of the community feed |
+| Remove content | Mark content as removed (soft delete) |
+| Ban user | Add device ID to community ban list |
+
+Moderation actions are signed with the moderator's Schnorr key pair for auditability.

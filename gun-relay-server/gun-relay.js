@@ -83,6 +83,69 @@ app.get('/health', (_req, res) => {
   });
 });
 
+// ─── REST query API (spec section 18.3–18.4) ────────────────────────────────
+
+// GET /db/search?prefix=<prefix>&limit=<limit>
+// Scans Gun's in-memory graph for souls matching the given prefix.
+app.get('/db/search', (req, res) => {
+  const prefix = req.query.prefix;
+  const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
+
+  if (!prefix) {
+    return res.status(400).json({ error: 'prefix query parameter required' });
+  }
+
+  const gunInstance = app.get('gun');
+  const results = [];
+
+  try {
+    gunInstance.get(prefix).map().once((data, key) => {
+      if (!data || !key || String(key).startsWith('_')) return;
+      if (results.length < limit) {
+        results.push({ soul: `${prefix}/${key}`, data });
+      }
+    });
+  } catch {
+    // ignore Gun errors
+  }
+
+  // Gun .once() is async; return after a short delay
+  setTimeout(() => {
+    res.json({ results });
+  }, 200);
+});
+
+// GET /db/soul?soul=<path>
+// Fetch a single Gun node by its full path.
+app.get('/db/soul', (req, res) => {
+  const soul = req.query.soul;
+
+  if (!soul) {
+    return res.status(400).json({ error: 'soul query parameter required' });
+  }
+
+  const gunInstance = app.get('gun');
+  const parts = soul.split('/');
+  let node = gunInstance;
+  for (const part of parts) {
+    node = node.get(part);
+  }
+
+  node.once((data) => {
+    if (!data) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    res.json({ soul, data });
+  });
+
+  // Timeout fallback
+  setTimeout(() => {
+    if (!res.headersSent) {
+      res.status(404).json({ error: 'not found' });
+    }
+  }, 2000);
+});
+
 // Create HTTP server and attach Gun
 const server = http.createServer(app);
 
